@@ -14,8 +14,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime
+import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .config import RUNS
@@ -58,6 +59,24 @@ CANDIDATES = [
     Candidate("короткая постановка", SHORT),
     Candidate("постановка с правилами", DETAILED),
     Candidate("правила + рассуждение", DETAILED, body=THINKING, max_tokens=2048),
+    Candidate(
+        "правила + примеры",
+        DETAILED + """
+
+Пример 1:
+Обращение: «Покупатель оплатил набор кистей, деньги поступили, но наш сервер
+не получил уведомление об оплате. Как повторно отправить webhook?»
+Разбор: платёж прошёл; вопрос об уведомлении для сервера относится к интеграции.
+Ответ: интеграция
+
+Пример 2:
+Обращение: «Отменил покупку настольной лампы, магазин подтвердил возврат
+в прошлую пятницу. Когда сумма вернётся на карту?»
+Разбор: клиент уточняет статус возврата за отменённую покупку.
+Ответ: возвраты
+
+Для нового обращения выдай только категорию, без разбора.""",
+    ),
 ]
 
 
@@ -149,6 +168,9 @@ def summarize(
         "p50, с": percentile(latencies, 0.5),
         "p95, с": percentile(latencies, 0.95),
         "первый токен p50, с": percentile(ttfts, 0.5),
+        "входных токенов на обращение": per(
+            total.input_tokens + total.cache_read_tokens + total.cache_write_tokens
+        ),
         "токенов на обращение": per(total.total_tokens),
         "взвешенных на обращение": per(total.weighted),
         "цена за 1000, у.е.": 1000 * per(total.cost),
@@ -189,10 +211,11 @@ def main() -> None:
             await run_candidate(llm, cand, rows, args.concurrency) for cand in chosen
         ]
 
-    results, spent = [], 0.0
+    results, details, spent = [], {}, 0.0
     for cand, done in zip(chosen, asyncio.run(run_all())):
         spent += sum(r.usage.weighted for r in done)
         results.append(summarize(cand.name, done, args.flow))
+        details[cand.name] = [asdict(row) for row in done]
     report = table(results)
     print(report)
     footer = (
@@ -205,6 +228,15 @@ def main() -> None:
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     (RUNS / "s1_bench.md").write_text(
         "# Замер кандидатов, %s\n\n%s\n%s\n" % (stamp, report, footer), encoding="utf-8"
+    )
+
+    (RUNS / "s1_bench.json").write_text(
+        json.dumps(
+            {"model": llm.cfg.model, "n": len(rows), "flow_per_day": args.flow,
+             "summary": results, "rows": details},
+            ensure_ascii=False, indent=2,
+        ) + "\n",
+        encoding="utf-8",
     )
 
 
