@@ -91,6 +91,9 @@ class Row:
     latency_s: float = 0.0
     ttft_s: Optional[float] = None
     usage: Usage = field(default_factory=Usage)
+    expected: Optional[str] = None
+    predicted: Optional[str] = None
+    response: str = ""
 
 
 def prompt(cand: Candidate, row: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -135,7 +138,7 @@ async def run_candidate(
                     prompt(cand, row), max_tokens=cand.max_tokens
                 )
             except LLMError:
-                return Row(row["id"], ok=False, failed=True)
+                return Row(row["id"], ok=False, failed=True, expected=row["gold"]["category"])
         return Row(
             row["id"],
             parse_category(res.text) == row["gold"]["category"],
@@ -143,6 +146,9 @@ async def run_candidate(
             latency_s=res.total_s,
             ttft_s=res.ttft_s,
             usage=res.usage,
+            expected=row["gold"]["category"],
+            predicted=parse_category(res.text),
+            response=res.text,
         )
 
     return list(await asyncio.gather(*(one(r) for r in rows)))
